@@ -80,7 +80,6 @@ int main(void) {
 			else time++;
 			continue;
 		}
-
 		/* execute 1 time unit */
 		p[idx].rem -= 1;
 		/* record timeline */
