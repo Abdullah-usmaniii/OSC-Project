@@ -1,145 +1,276 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <pthread.h>
 
-#define MAXPID 32
+// --- Constants & Definitions ---
+#define MAX_PROCESSES 10
+#define TIME_UNIT_DELAY 0 // Set to 100 or similar if you want to see it run in real-time (ms)
 
 typedef struct {
-	char pid[MAXPID];
-	int arrival;
-	int burst;
-	int rem;       /* remaining time used by simulator */
-	int completion;/* -1 if not provided / not finished */
-	int given_completion; /* flag: user provided completion */
+    int pid;
+    int arrival_time;
+    int burst_time;
+    int remaining_time;
+    int completion_time;
+    int turnaround_time;
+    int waiting_time;
+    int response_time;
+    int start_time;
+    bool is_started;
+    bool is_completed;
 } Process;
 
-int main(void) {
-	int n;
-	printf("Shortest Remaining Time First (SRTF) scheduling simulation\n");
-	printf("Enter number of processes: ");
-	if (scanf("%d", &n) != 1 || n <= 0) {
-		printf("Invalid number of processes.\n");
-		return 1;
-	}
+typedef struct {
+    int time;
+    int pid;
+} GanttLog;
 
-	Process *p = malloc(sizeof(Process) * n);
-	if (!p) return 2;
+// --- Global Variables (Shared Resources) ---
+Process processes[MAX_PROCESSES];
+int num_processes;
+int total_time = 0;
 
-	for (int i = 0; i < n; ++i) {
-		int rem_inp, comp_inp;
-		printf("\nProcess %d:\n", i + 1);
-		printf("  Enter Process ID (no spaces): ");
-		scanf("%s", p[i].pid);
-		printf("  Arrival time (int): ");
-		scanf("%d", &p[i].arrival);
-		printf("  CPU burst time (int): ");
-		scanf("%d", &p[i].burst);
-		printf("  Remaining burst time (-1 to use full burst): ");
-		scanf("%d", &rem_inp);
-		printf("  Completion time (-1 to compute): ");
-		scanf("%d", &comp_inp);
+// Gantt Chart Storage
+GanttLog gantt_chart[1000];
+int gantt_index = 0;
 
-		p[i].rem = (rem_inp >= 0) ? rem_inp : p[i].burst;
-		if (comp_inp >= 0) {
-			p[i].completion = comp_inp;
-			p[i].given_completion = 1;
-			/* If user supplied completion, treat process as already finished */
-			p[i].rem = 0;
-		} else {
-			p[i].completion = -1;
-			p[i].given_completion = 0;
-		}
-	}
+// Synchronization
+pthread_mutex_t data_mutex;
 
-	/* Find start time (min arrival) */
-	int time = p[0].arrival;
-	for (int i = 1; i < n; ++i) if (p[i].arrival < time) time = p[i].arrival;
+// --- Function Prototypes ---
+void* srtf_simulation_thread(void* arg);
+void calculate_metrics();
+void print_gantt_chart();
+void print_table();
 
-	/* Simulation: preemptive, unit-time ticks */
-	int finished = 0;
-	int *timeline = NULL; /* store executed process index per time unit */
-	int tlen = 0;
-	int max_iter = 1000000; /* guard against infinite loops */
-	while (finished < n && max_iter--) {
-		int idx = -1;
-		int min_rem = 1<<30;
-		for (int i = 0; i < n; ++i) {
-			if (!p[i].given_completion && p[i].arrival <= time && p[i].rem > 0) {
-				if (p[i].rem < min_rem) {
-					min_rem = p[i].rem;
-					idx = i;
-				}
-			}
-		}
+int main() {
+    printf("   SRTF Process Scheduling Simulation (Multithreaded)\n");
 
-		if (idx == -1) {
-			/* nothing ready: advance time to next arrival or by 1 */
-			int next_arr = 1<<30;
-			for (int i = 0; i < n; ++i) if (p[i].arrival > time) next_arr = (p[i].arrival < next_arr) ? p[i].arrival : next_arr;
-			if (next_arr != (1<<30)) time = next_arr;
-			else time++;
-			continue;
-		}
+    // 1. Input Section (Main Thread / UI)
+    while (1) {
+        printf("Enter number of processes (1-%d): ", MAX_PROCESSES);
+        if (scanf("%d", &num_processes) == 1 && num_processes >= 1 && num_processes <= MAX_PROCESSES) {
+            break;
+        }
+        printf("Invalid input. Please enter a number between 1 and %d.\n", MAX_PROCESSES);
+        while(getchar() != '\n'); // clear buffer
+    }
 
-		/* execute 1 time unit */
-		p[idx].rem -= 1;
-		/* record timeline */
-		int *tmp = realloc(timeline, sizeof(int) * (tlen + 1));
-		if (!tmp) break;
-		timeline = tmp;
-		timeline[tlen++] = idx;
-		time += 1;
+    for (int i = 0; i < num_processes; i++) {
+        processes[i].pid = i + 1;
+        printf("\nProcess P%d:\n", i + 1);
+        
+        // Input Validation Loop for Arrival Time
+        while (1) {
+            printf("  Arrival Time (>=0): ");
+            if (scanf("%d", &processes[i].arrival_time) == 1 && processes[i].arrival_time >= 0) break;
+            printf("  Invalid Arrival Time.\n");
+            while(getchar() != '\n');
+        }
 
-		if (p[idx].rem == 0) {
-			p[idx].completion = time;
-			finished++;
-		}
-	}
+        // Input Validation Loop for Burst Time
+        while (1) {
+            printf("  Burst Time (>0): ");
+            if (scanf("%d", &processes[i].burst_time) == 1 && processes[i].burst_time > 0) break;
+            printf("  Invalid Burst Time. Must be greater than 0.\n");
+            while(getchar() != '\n');
+        }
 
-	if (max_iter <= 0) fprintf(stderr, "Simulation aborted: too many iterations.\n");
+        // Initialize dynamic fields
+        processes[i].remaining_time = processes[i].burst_time;
+        processes[i].is_completed = false;
+        processes[i].is_started = false;
+    }
 
-	/* Compute and print results */
-	printf("\nResults:\n");
-	printf("%-8s %-8s %-8s %-12s %-12s %-12s %-8s\n", "PID", "Arrival", "Burst", "RemainingInit", "Completion", "Turnaround", "Waiting");
-	double total_tat = 0, total_wt = 0;
-	for (int i = 0; i < n; ++i) {
-		int completion = p[i].completion;
-		int turnaround = (completion >= 0) ? (completion - p[i].arrival) : -1;
-		int waiting = (turnaround >= 0) ? (turnaround - p[i].burst) : -1;
-		int rem_init = (p[i].burst - ( (p[i].given_completion) ? p[i].burst : (p[i].rem==0 ? 0 : p[i].rem) ));
-		/* rem_init computed awkwardly; better to show the remaining that user provided or original burst */
-		int user_rem = p[i].burst; /* default */
-		/* If user originally entered a remaining (less than burst), we cannot recover it now; instead show current rem when started */
-		/* To simplify, show original burst as "RemainingInit" when user didn't provide remaining; otherwise show the remaining they provided. */
-		/* But we didn't store original remaining input separately. To keep output meaningful, show the burst as RemainingInit if not given. */
-		int display_rem = p[i].burst;
-		if (p[i].given_completion) display_rem = 0;
+    // 2. Initialize Synchronization
+    if (pthread_mutex_init(&data_mutex, NULL) != 0) {
+        fprintf(stderr, "Mutex init failed\n");
+        return 1;
+    }
 
-		printf("%-8s %-8d %-8d %-12d %-12d %-12d %-8d\n",
-			   p[i].pid, p[i].arrival, p[i].burst, display_rem, completion, turnaround, waiting);
-		if (turnaround >= 0) { total_tat += turnaround; total_wt += waiting; }
-	}
+    // 3. Start Simulation Thread (Kernel Thread)
+    pthread_t tid;
+    printf("\n[System] Starting Scheduler Thread...\n");
+    if (pthread_create(&tid, NULL, srtf_simulation_thread, NULL) != 0) {
+        fprintf(stderr, "Failed to create thread\n");
+        return 1;
+    }
 
-	int completed_count = 0;
-	for (int i = 0; i < n; ++i) if (p[i].completion >= 0) completed_count++;
-	if (completed_count > 0) {
-		printf("\nAverage Turnaround Time = %.2f\n", total_tat / completed_count);
-		printf("Average Waiting Time    = %.2f\n", total_wt / completed_count);
-	}
+    // 4. Wait for Simulation to Finish
+    pthread_join(tid, NULL);
+    printf("[System] Simulation Completed.\n");
 
-	/* Print simple Gantt chart */
-	if (tlen > 0) {
-		printf("\nGantt timeline (per time unit):\n");
-		for (int i = 0; i < tlen; ++i) {
-			printf("|%s", p[timeline[i]].pid);
-		}
-		printf("|\n0");
-		for (int i = 1; i <= tlen; ++i) printf(" %d", i);
-		printf("\n");
-	}
+    // 5. Output Results (UI)
+    calculate_metrics();
+    print_table();
+    print_gantt_chart();
 
-	free(p);
-	free(timeline);
-	return 0;
+    // Cleanup
+    pthread_mutex_destroy(&data_mutex);
+    return 0;
 }
 
+// --- Scheduler Logic (Worker Thread) ---
+void* srtf_simulation_thread(void* arg) {
+    int completed_count = 0;
+    int current_time = 0;
+    int prev_process_id = -1;
+
+    // Simulation Loop
+    while (completed_count < num_processes) {
+        int shortest_idx = -1;
+        int min_remaining = INT_MAX;
+
+        // Critical Section: Reading Shared Data
+        pthread_mutex_lock(&data_mutex);
+
+        // Find process with Shortest Remaining Time among those arrived
+        for (int i = 0; i < num_processes; i++) {
+            if (processes[i].arrival_time <= current_time && !processes[i].is_completed) {
+                if (processes[i].remaining_time < min_remaining) {
+                    min_remaining = processes[i].remaining_time;
+                    shortest_idx = i;
+                }
+                // Tie-breaker: If remaining time is equal, FCFS (implicit by loop order or arrival)
+                if (processes[i].remaining_time == min_remaining) {
+                    if (processes[i].arrival_time < processes[shortest_idx].arrival_time) {
+                        shortest_idx = i;
+                    }
+                }
+            }
+        }
+
+        if (shortest_idx != -1) {
+            // Process found
+            Process *p = &processes[shortest_idx];
+
+            // Response Time Logic: First time CPU touches this process
+            if (!p->is_started) {
+                p->start_time = current_time;
+                p->response_time = current_time - p->arrival_time;
+                p->is_started = true;
+            }
+
+            // Logging for Gantt Chart (Compression logic: only log on switch)
+            if (p->pid != prev_process_id) {
+                gantt_chart[gantt_index].time = current_time;
+                gantt_chart[gantt_index].pid = p->pid;
+                gantt_index++;
+                prev_process_id = p->pid;
+            }
+
+            // Execute for 1 unit
+            p->remaining_time--;
+            current_time++;
+
+            // Check completion
+            if (p->remaining_time == 0) {
+                p->completion_time = current_time;
+                p->is_completed = true;
+                completed_count++;
+            }
+        } else {
+            // IDLE CPU (No process arrived yet)
+            if (prev_process_id != 0) {
+                gantt_chart[gantt_index].time = current_time;
+                gantt_chart[gantt_index].pid = 0; // 0 represents IDLE
+                gantt_index++;
+                prev_process_id = 0;
+            }
+            current_time++;
+        }
+
+        pthread_mutex_unlock(&data_mutex);
+        // End Critical Section
+    }
+
+    // Capture final time for Gantt chart end
+    gantt_chart[gantt_index].time = current_time;
+    gantt_chart[gantt_index].pid = -1; // End marker
+    
+    return NULL;
+}
+
+// --- Helper Functions ---
+
+void calculate_metrics() {
+    for (int i = 0; i < num_processes; i++) {
+        // Turnaround Time = Completion - Arrival
+        processes[i].turnaround_time = processes[i].completion_time - processes[i].arrival_time;
+        
+        // Waiting Time = Turnaround - Burst
+        processes[i].waiting_time = processes[i].turnaround_time - processes[i].burst_time;
+    }
+}
+
+void print_table() {
+    printf("\nSRTF Performance Results:\n");
+    printf("----------------------------------------------------------------------------------\n");
+    printf("| PID | Arrival | Burst | Completion | Turnaround | Waiting | Response |\n");
+    printf("|-----|---------|-------|------------|------------|---------|----------|\n");
+    
+    float avg_tat = 0, avg_wt = 0;
+    
+    for (int i = 0; i < num_processes; i++) {
+        printf("| P%d  | %7d | %5d | %10d | %10d | %7d | %8d |\n", 
+               processes[i].pid, 
+               processes[i].arrival_time, 
+               processes[i].burst_time, 
+               processes[i].completion_time, 
+               processes[i].turnaround_time, 
+               processes[i].waiting_time, 
+               processes[i].response_time);
+        
+        avg_tat += processes[i].turnaround_time;
+        avg_wt += processes[i].waiting_time;
+    }
+    printf("----------------------------------------------------------------------------------\n");
+    printf("Average Turnaround Time = %.2f\n", avg_tat / num_processes);
+    printf("Average Waiting Time    = %.2f\n", avg_wt / num_processes);
+}
+
+void print_gantt_chart() {
+    printf("\nGantt Chart:\n");
+    
+    // Top Border
+    printf(" ");
+    for (int i = 0; i < gantt_index; i++) {
+        int duration = gantt_chart[i+1].time - gantt_chart[i].time;
+        // simple scaling for display
+        for(int k=0; k<duration; k++) printf("--");
+        printf("-");
+    }
+    printf("\n|");
+
+    // Process IDs
+    for (int i = 0; i < gantt_index; i++) {
+        int duration = gantt_chart[i+1].time - gantt_chart[i].time;
+        int mid = duration; 
+        
+        for(int k=0; k<duration-1; k++) printf(" ");
+        if (gantt_chart[i].pid == 0) printf("IDLE");
+        else printf("P%d", gantt_chart[i].pid);
+        for(int k=0; k<duration-1; k++) printf(" ");
+        printf("|");
+    }
+    
+    // Bottom Border
+    printf("\n ");
+    for (int i = 0; i < gantt_index; i++) {
+        int duration = gantt_chart[i+1].time - gantt_chart[i].time;
+        for(int k=0; k<duration; k++) printf("--");
+        printf("-");
+    }
+    
+    // Timeline
+    printf("\n0");
+    for (int i = 0; i < gantt_index; i++) {
+        int duration = gantt_chart[i+1].time - gantt_chart[i].time;
+        for(int k=0; k<duration; k++) printf("  ");
+        if (gantt_chart[i+1].time > 9) printf("\b"); // adjust backspace for 2 digit numbers
+        printf("%d", gantt_chart[i+1].time);
+    }
+    printf("\n");
+}
