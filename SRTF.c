@@ -6,7 +6,7 @@
 
 // Constants & Definitions 
 #define MAX_PROCESSES 10
-#define TIME_UNIT_DELAY 0 // Set to >0 (e.g., 100) to see the simulation run in real-time
+#define TIME_UNIT_DELAY 0 // in milliseconds
 
 typedef struct {
     int pid;
@@ -56,8 +56,8 @@ int main() {
         // Global 'processes' array is overwritten by input loop below
         // Global 'num_processes' is overwritten by input below
 
-        print(""); //leave an empty line so if user chooses yes to enter more processes looks cleaner
-        printf("   SRTF Process Scheduling Simulation (Windows Multithreaded)\n");
+        
+        printf("\nSRTF Process Scheduling Simulation\n");
 
         // 2. Input Section
         while (1) {
@@ -129,7 +129,7 @@ int main() {
 
         // 6. Ask User to Continue
         printf("\nDo you wish to Enter new processes? (y/n): ");
-        // Space before %c tells scanf to skip any leftover whitespace/newlines
+        
         scanf(" %c", &user_choice);
 
     } while (user_choice == 'y' || user_choice == 'Y');
@@ -141,7 +141,7 @@ int main() {
     return 0;
 }
 
-// --- Scheduler Logic (Worker Thread) ---
+//  Worker Thread (scheduler logic)
 DWORD WINAPI srtf_simulation_thread(LPVOID arg) {
     int completed_count = 0;
     int current_time = 0;
@@ -221,7 +221,7 @@ DWORD WINAPI srtf_simulation_thread(LPVOID arg) {
     return 0;
 }
 
-// --- Helper Functions ---
+// Helper Functions
 
 void calculate_metrics() {
     for (int i = 0; i < num_processes; i++) {
@@ -232,7 +232,7 @@ void calculate_metrics() {
 
 void print_table() {
     printf("\nSRTF Performance Results:\n");
-    printf("----------------------------------------------------------------------------------\n");
+    printf("-----------------------------------------------------------------------------\n");
     printf("| PID | Arrival | Burst | Completion | Turnaround | Waiting | Response |\n");
     printf("|-----|---------|-------|------------|------------|---------|----------|\n");
     
@@ -251,7 +251,7 @@ void print_table() {
         avg_tat += processes[i].turnaround_time;
         avg_wt += processes[i].waiting_time;
     }
-    printf("----------------------------------------------------------------------------------\n");
+    printf("------------------------------------------------------------------------------\n");
     printf("Average Turnaround Time = %.2f\n", avg_tat / num_processes);
     printf("Average Waiting Time    = %.2f\n", avg_wt / num_processes);
 }
