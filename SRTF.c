@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdbool.h>
-#include <windows.h> 
+#include <windows.h> // Library for threading and synchronization
 
 // Constants & Definitions 
 #define MAX_PROCESSES 10
