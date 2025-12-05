@@ -5,7 +5,6 @@ Interactive Windows console program that simulates the Shortest Remaining Time F
 ## What’s here
 - `SRTF.c`: main simulation with input prompts, scheduling loop, stats, and Gantt chart.
 - `SRTF.exe`: prebuilt Windows binary.
-- `Test.c`: small pthread experiment; not part of the simulator.
 
 ## Requirements
 - Windows with a C compiler that supports `windows.h` (MinGW-w64 or MSVC recommended).
